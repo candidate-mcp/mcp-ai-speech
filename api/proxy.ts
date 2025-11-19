@@ -22,25 +22,52 @@ export default async function handler(
   }
 
   try {
-    // URL에서 경로 추출
-    const url = req.url || '';
-    const urlObj = new URL(url, `https://${req.headers.host || 'example.com'}`);
-    const pathname = urlObj.pathname;
+    // 경로 추출: Vercel의 rewrites를 통해 전달된 경로 파싱
+    let path = '';
     
-    // /api/proxy/ 제거하여 실제 API 경로 추출
-    const path = pathname.replace(/^\/api\/proxy\//, '');
-    
-    if (!path) {
-      return res.status(400).json({ error: 'Invalid path' });
+    // 방법 1: req.url에서 직접 추출 (가장 확실한 방법)
+    if (req.url) {
+      // req.url은 /api/proxy/v1beta/models/... 형태일 수 있음
+      const urlPath = req.url.split('?')[0]; // 쿼리 파라미터 제거
+      path = urlPath.replace(/^\/api\/proxy\/?/, ''); // /api/proxy/ 제거
     }
     
-    // 쿼리 파라미터 재구성
-    const queryParams = new URLSearchParams();
-    urlObj.searchParams.forEach((value, key) => {
-      if (key !== 'path') {
-        queryParams.append(key, value);
+    // 방법 2: req.query.path 사용 (Vercel의 동적 경로)
+    if (!path && req.query) {
+      if (typeof req.query.path === 'string') {
+        path = req.query.path;
+      } else if (Array.isArray(req.query.path)) {
+        path = (req.query.path as string[]).join('/');
       }
-    });
+    }
+    
+    // 경로가 여전히 없으면 에러
+    if (!path) {
+      console.error('Path extraction failed:', {
+        url: req.url,
+        query: req.query,
+        headers: req.headers
+      });
+      return res.status(400).json({ 
+        error: 'Invalid path', 
+        details: 'No path provided',
+        debug: { url: req.url, query: req.query }
+      });
+    }
+    
+    // 쿼리 파라미터 재구성 (path 제외)
+    const queryParams = new URLSearchParams();
+    if (req.query) {
+      Object.entries(req.query).forEach(([key, value]) => {
+        if (key !== 'path' && value) {
+          if (Array.isArray(value)) {
+            value.forEach(v => queryParams.append(key, String(v)));
+          } else {
+            queryParams.append(key, String(value));
+          }
+        }
+      });
+    }
     
     // API 키 추가
     queryParams.set('key', apiKey);
@@ -48,6 +75,12 @@ export default async function handler(
     // 대상 API URL 구성 (Google Generative AI API)
     const baseUrl = 'https://generativelanguage.googleapis.com';
     const finalUrl = `${baseUrl}/${path}${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+    
+    console.log('Proxy request:', {
+      originalPath: path,
+      finalUrl: finalUrl.replace(apiKey, '***'),
+      method: req.method
+    });
 
     // 요청 본문 처리
     let body: string | undefined;
