@@ -90,28 +90,58 @@ export const analyzePerformance = async (topic: Topic, conversation: Conversatio
         ]
     };
 
-    try {
-        const response = await ai.models.generateContent({
-            model,
-            // FIX: Simplified the `contents` property for a text-only prompt, adhering to Gemini API best practices.
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: feedbackSchema,
-            },
-        });
-        
-        const jsonText = response.text;
+    // 재시도 로직: 503 에러(서버 과부하) 시 최대 3번 재시도
+    const maxRetries = 3;
+    let lastError: any = null;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            if (attempt > 0) {
+                // 재시도 전 대기 (지수 백오프: 1초, 2초, 4초)
+                const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+                console.log(`재시도 ${attempt}/${maxRetries} - ${delay}ms 후 재시도...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+            
+            const response = await ai.models.generateContent({
+                model,
+                // FIX: Simplified the `contents` property for a text-only prompt, adhering to Gemini API best practices.
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: feedbackSchema,
+                },
+            });
+            
+            const jsonText = response.text;
 
-        if (!jsonText) {
-            console.error("Invalid response structure from API:", response);
-            throw new Error("API로부터 유효하지 않은 응답을 받았습니다.");
+            if (!jsonText) {
+                console.error("Invalid response structure from API:", response);
+                throw new Error("API로부터 유효하지 않은 응답을 받았습니다.");
+            }
+
+            return JSON.parse(jsonText.trim());
+
+        } catch (error: any) {
+            lastError = error;
+            console.error(`Error analyzing performance (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
+            
+            // 503 에러(서버 과부하)가 아니거나 마지막 시도면 에러를 던짐
+            const is503Error = error?.message?.includes('503') || 
+                             error?.message?.includes('overloaded') ||
+                             error?.message?.includes('UNAVAILABLE');
+            
+            if (!is503Error || attempt === maxRetries) {
+                if (is503Error && attempt === maxRetries) {
+                    throw new Error("서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.");
+                }
+                throw new Error("피드백 분석 중 오류가 발생했습니다.");
+            }
+            
+            // 503 에러이고 아직 재시도 가능하면 계속 진행
         }
-
-        return JSON.parse(jsonText.trim());
-
-    } catch (error) {
-        console.error("Error analyzing performance:", error);
-        throw new Error("피드백 분석 중 오류가 발생했습니다.");
     }
+    
+    // 이 코드는 실행되지 않아야 하지만 타입 안전성을 위해 추가
+    throw lastError || new Error("피드백 분석 중 오류가 발생했습니다.");
 };

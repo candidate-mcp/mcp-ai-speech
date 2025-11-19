@@ -108,6 +108,23 @@ export default async function handler(
 
     const data = await response.text();
     
+    // 상세한 로깅 (에러 응답 포함)
+    if (!response.ok) {
+      console.error('Gemini API Error:', {
+        status: response.status,
+        statusText: response.statusText,
+        path: path,
+        responseBody: data.substring(0, 500), // 처음 500자만 로그
+        method: req.method
+      });
+    } else {
+      console.log('Proxy request successful:', {
+        status: response.status,
+        path: path,
+        method: req.method
+      });
+    }
+    
     // 응답 헤더 복사
     response.headers.forEach((value, key) => {
       const lowerKey = key.toLowerCase();
